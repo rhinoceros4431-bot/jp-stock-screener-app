@@ -1,0 +1,137 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b1120;
+  --card: #161f32;
+  --border: #263248;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --accent: #22c55e;
+  --danger: #ef4444;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding-bottom: 40px;
+}
+
+header {
+  padding: 20px 16px 12px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+}
+
+header h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+
+header .updated {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.subscribe-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+button {
+  background: var(--accent);
+  color: #04140a;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#status-text {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+main {
+  padding: 12px 16px;
+}
+
+.summary {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 8px 0 16px;
+}
+
+.stock-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+.stock-card.new {
+  border-color: var(--accent);
+}
+
+.stock-card .name-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.stock-card .name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.stock-card .code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stock-card ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.badge-new {
+  display: inline-block;
+  background: var(--accent);
+  color: #04140a;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  margin-left: 6px;
+}
+
+.empty-state {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 16px;
+  font-size: 14px;
+}
