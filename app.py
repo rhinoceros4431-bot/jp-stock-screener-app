@@ -36,7 +36,7 @@ BASE_DIR = Path(__file__).parent
 FRONTEND_DIR = BASE_DIR
 FRONTEND_FILES = {
     "index.html", "app.js", "style.css", "manifest.json", "service-worker.js",
-    "icon-192.png", "icon-512.png",
+    "icon-192.png", "icon-512.png", "settings.html", "settings.js",
 }
 
 app = Flask(__name__, static_folder=None)
