@@ -29,7 +29,9 @@ import push
 from screener_job import CONFIG_PATH, RESULTS_PATH, run_screening
 
 BASE_DIR = Path(__file__).parent
-FRONTEND_DIR = BASE_DIR.parent / "frontend"
+# frontendはbackendの中に置く(Render等でRoot Directoryをbackendに設定した場合、
+# 兄弟フォルダはビルド・実行環境から除外され読み込めなくなるため)
+FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = Flask(__name__, static_folder=None)
 
