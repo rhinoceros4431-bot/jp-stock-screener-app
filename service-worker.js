@@ -1,5 +1,5 @@
-const CACHE_NAME = "stock-screener-v1";
-const APP_SHELL = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json", "/icon-192.png", "/icon-512.png"];
+const CACHE_NAME = "stock-screener-v2";
+const APP_SHELL = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json", "/icon-192.png", "/icon-512.png", "/settings.html", "/settings.js"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
