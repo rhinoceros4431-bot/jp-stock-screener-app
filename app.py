@@ -29,9 +29,15 @@ import push
 from screener_job import CONFIG_PATH, RESULTS_PATH, run_screening
 
 BASE_DIR = Path(__file__).parent
-# frontendはbackendの中に置く(Render等でRoot Directoryをbackendに設定した場合、
-# 兄弟フォルダはビルド・実行環境から除外され読み込めなくなるため)
-FRONTEND_DIR = BASE_DIR / "frontend"
+# フロントエンドのファイルもbackendと同じフォルダに置く構成(サブフォルダ構造を保ったまま
+# GitHubにアップロードするのが難しいケースがあるため、あえて全部同じ階層に統一している)。
+# app.py・config.yaml・vapid_keys.txt など公開してはいけないファイルと同じ場所にあるため、
+# 以下のホワイトリストに載っているファイル名だけを配信し、それ以外は404にする。
+FRONTEND_DIR = BASE_DIR
+FRONTEND_FILES = {
+    "index.html", "app.js", "style.css", "manifest.json", "service-worker.js",
+    "icon-192.png", "icon-512.png",
+}
 
 app = Flask(__name__, static_folder=None)
 
@@ -49,6 +55,9 @@ def index():
 
 @app.route("/<path:filename>")
 def frontend_files(filename):
+    # ホワイトリスト外(app.py, config.yaml, vapid_keys.txt, .env等)は絶対に配信しない
+    if filename not in FRONTEND_FILES:
+        return jsonify({"error": "not found"}), 404
     return send_from_directory(FRONTEND_DIR, filename)
 
 

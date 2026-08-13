@@ -1,5 +1,5 @@
 const CACHE_NAME = "stock-screener-v1";
-const APP_SHELL = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
+const APP_SHELL = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -37,8 +37,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
-      icon: "/icons/icon-192.png",
-      badge: "/icons/icon-192.png",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
       data: { url: data.url || "/" },
     })
   );

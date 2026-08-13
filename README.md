@@ -17,24 +17,25 @@
 
 ```
 jp-stock-screener-app/
-├── backend/                 Flaskサーバー(スクリーニング実行・API・プッシュ送信)
-│   ├── app.py                メインアプリ
-│   ├── screener_job.py       スクリーニング処理(既存ロジックを流用)
-│   ├── push.py                Web Push送信
-│   ├── db.py                   購読情報の保存(SQLite)
-│   ├── core/                    indicators.py / universe.py / yfinance_client.py
-│   ├── config.yaml             通知条件の設定
-│   ├── generate_vapid_keys.py  プッシュ通知用の鍵を再生成するスクリプト
-│   ├── vapid_keys.txt           あらかじめ生成した鍵(下記参照)
-│   ├── requirements.txt
-│   ├── Procfile                  Render/Railway等向けの起動コマンド
-│   └── .env.example
-└── frontend/                 PWA本体(静的ファイル。backendが配信します)
-    ├── index.html / app.js / style.css
-    ├── manifest.json           ホーム画面追加用の設定
+├── README.md / DEPLOY_FREE.md / DEPLOY_NO_TERMINAL.md
+└── backend/                    このフォルダの中身を丸ごとGitHubにアップロードします(サブフォルダ無し)
+    ├── app.py                   メインアプリ(Flask)
+    ├── screener_job.py          スクリーニング処理
+    ├── indicators.py / universe.py / yfinance_client.py   データ取得・指標計算
+    ├── push.py                  Web Push送信
+    ├── db.py                    購読情報の保存(SQLite)
+    ├── config.yaml              通知条件の設定
+    ├── index.html / app.js / style.css   PWAの画面
+    ├── manifest.json            ホーム画面追加用の設定
     ├── service-worker.js        プッシュ通知受信・オフライン対応
-    └── icons/                    アプリアイコン
+    ├── icon-192.png / icon-512.png       アプリアイコン
+    ├── generate_vapid_keys.py   プッシュ通知用の鍵を再生成するスクリプト
+    ├── vapid_keys.txt           あらかじめ生成した鍵(GitHubにはアップロードしないこと。下記参照)
+    ├── requirements.txt / Procfile / setup.sh / start.sh / setup_ngrok.sh
+    └── env.example
 ```
+
+すべてのファイルを1つの階層(`backend`直下)にまとめています。フォルダ分けをすると、GitHubのブラウザアップロードで構造が崩れることがあるためです。`app.py`側では、`index.html`や`app.js`などフロントエンド用のファイル名だけを配信するようホワイトリストで制限しているので、`config.yaml`や`vapid_keys.txt`など他のファイルが誤って外部から見えることはありません。
 
 ---
 
@@ -50,7 +51,7 @@ jp-stock-screener-app/
 cd jp-stock-screener-app/backend
 pip install -r requirements.txt
 
-cp .env.example .env
+cp env.example .env
 # .env を開き、vapid_keys.txt の内容をコピーして VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY に設定
 # ADMIN_TOKEN は好きな文字列でOK
 
@@ -75,15 +76,7 @@ python app.py
 | Render.com / Railway 等の有料プラン | 月500円〜1,000円程度 | ○ | 常時起動でき、スケジュール実行が確実に動きます。実用するならこちらを推奨 |
 | 自宅PC + 常時起動 + Cloudflare Tunnel(無料) | 無料 | PCが起動している間のみ | 電気代はかかりますが金銭コストはゼロ。PCを付けっぱなしにできる場合の選択肢 |
 
-**無料での公開手順は [DEPLOY_FREE.md](./DEPLOY_FREE.md) にまとめました**(自宅PC + ngrokの無料固定ドメインを使う方法。ドメイン購入不要・費用ゼロ)。「多少の費用は許容できる」場合は月数百円のRender/Railway有料プランが一番手間が少なくおすすめです。
-
-デプロイ方法(Render.comの場合の一例):
-1. このフォルダをGitHubリポジトリにpush
-2. Render.comで「New Web Service」→ リポジトリを選択、Root Directoryを `backend` に設定
-3. Build Command: `pip install -r requirements.txt`
-4. Start Command: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120`
-5. 環境変数(Environment)に `.env.example` と同じ項目を設定
-6. デプロイ後に発行されるURL(https://xxxx.onrender.com)をスマホで開く
+**おすすめは [DEPLOY_NO_TERMINAL.md](./DEPLOY_NO_TERMINAL.md) です**(あなたのPCには何もインストールせず、ブラウザの画面操作だけでGitHub + Render.comの無料枠にデプロイする方法)。自宅PCを常時起動できる場合は [DEPLOY_FREE.md](./DEPLOY_FREE.md)(ngrokを使う方法)も選べます。
 
 ---
 

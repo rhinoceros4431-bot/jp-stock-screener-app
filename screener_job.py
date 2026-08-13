@@ -7,13 +7,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import sys
 from pathlib import Path
 
 import pandas as pd
 import yaml
-
-sys.path.append(str(Path(__file__).parent / "core"))
 
 import indicators as ind
 import universe as univ
