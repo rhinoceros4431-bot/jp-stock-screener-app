@@ -14,7 +14,7 @@ import yaml
 
 import indicators as ind
 import universe as univ
-from yfinance_client import fetch_daily_quotes
+from yfinance_client import fetch_daily_quotes_chunks
 
 import push
 
@@ -112,27 +112,11 @@ def run_screening() -> dict:
     listed = univ.load_universe(cfg.get("target_markets") or None)
     code_to_name = dict(zip(listed["Code"], listed["CompanyName"]))
     codes = listed["Code"].tolist()
+    total = len(codes)
 
-    print(f"[INFO] {len(codes)}銘柄の日足データを取得中(yfinance)...")
-    panel = fetch_daily_quotes(codes, period=period)
+    print(f"[INFO] {total}銘柄の日足データを取得中(yfinance)...")
 
-    results = []
-    if not panel.empty:
-        grouped = panel.groupby("Code")
-        for code, hist in grouped:
-            if code not in code_to_name:
-                continue
-            try:
-                hits = evaluate_stock(hist, cfg)
-            except Exception as e:
-                print(f"[WARN] {code} の評価中にエラー: {e}")
-                continue
-            if hits:
-                results.append({"code": code, "name": code_to_name[code], "hits": hits})
-
-    now = dt.datetime.now().isoformat(timespec="seconds")
-
-    # 前回結果と比較し、新規該当銘柄を検出(通知はこの新規分のみに絞る)
+    # 通知の新規判定用に、前回「完了済み」の結果を保持しておく
     prev_codes = set()
     if RESULTS_PATH.exists():
         try:
@@ -141,9 +125,46 @@ def run_screening() -> dict:
         except Exception:
             pass
 
+    results = []
+    done_count = 0
+    # 全銘柄の取得完了(15-30分程度かかる)を待たず、チャンク(150銘柄)ごとに
+    # 途中経過をresults_latest.jsonへ書き出す。これによりアプリ側は実行中も
+    # 「何も表示されない」状態にならず、その時点までの該当銘柄と進捗を表示できる。
+    for chunk_codes, panel in fetch_daily_quotes_chunks(codes, period=period):
+        if not panel.empty:
+            grouped = panel.groupby("Code")
+            for code, hist in grouped:
+                if code not in code_to_name:
+                    continue
+                try:
+                    hits = evaluate_stock(hist, cfg)
+                except Exception as e:
+                    print(f"[WARN] {code} の評価中にエラー: {e}")
+                    continue
+                if hits:
+                    results.append({"code": code, "name": code_to_name[code], "hits": hits})
+        done_count += len(chunk_codes)
+
+        partial_new = [r for r in results if r["code"] not in prev_codes]
+        partial_output = {
+            "updated_at": None,  # 完了前はNoneにして「実行中」と区別する(完了時刻ではないため)
+            "results": results,
+            "new_match_codes": [r["code"] for r in partial_new],
+            "status": "running",
+            "progress": {"done": done_count, "total": total},
+        }
+        RESULTS_PATH.write_text(json.dumps(partial_output, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    now = dt.datetime.now().isoformat(timespec="seconds")
     new_matches = [r for r in results if r["code"] not in prev_codes]
 
-    output = {"updated_at": now, "results": results, "new_match_codes": [r["code"] for r in new_matches]}
+    output = {
+        "updated_at": now,
+        "results": results,
+        "new_match_codes": [r["code"] for r in new_matches],
+        "status": "done",
+        "progress": {"done": total, "total": total},
+    }
     RESULTS_PATH.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[INFO] スクリーニング完了: {len(results)}銘柄該当 (うち新規{len(new_matches)}銘柄)")
 
