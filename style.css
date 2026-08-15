@@ -82,12 +82,73 @@ main {
   margin: 8px 0 16px;
 }
 
+.view-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.view-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.view-tab.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.result-section {
+  margin-bottom: 22px;
+}
+
+.section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 14px;
+  margin: 0 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.section-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 6px 0 10px;
+}
+
+.result-section.cat-oversold .section-title span:first-child {
+  color: var(--accent);
+}
+
+.result-section.cat-overbought .section-title span:first-child {
+  color: var(--danger);
+}
+
 .stock-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px 16px;
   margin-bottom: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.stock-card:hover {
+  border-color: var(--muted);
 }
 
 .stock-card.new {
@@ -96,19 +157,31 @@ main {
 
 .stock-card .name-row {
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
+  gap: 8px;
   margin-bottom: 6px;
+}
+
+.stock-card .rank-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 2px 6px;
 }
 
 .stock-card .name {
   font-weight: 600;
   font-size: 15px;
+  flex: 1;
 }
 
 .stock-card .code {
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .stock-card ul {
@@ -116,6 +189,84 @@ main {
   padding-left: 18px;
   font-size: 13px;
   color: var(--text);
+}
+
+/* チャートモーダル */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal-panel {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  padding: 20px 16px 28px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.modal-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+  padding: 6px 10px;
+}
+
+.modal-title {
+  font-size: 16px;
+  margin: 0 28px 4px 0;
+}
+
+.modal-code {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.modal-links {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.modal-links a {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.chart-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 8px;
 }
 
 .badge-new {
