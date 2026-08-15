@@ -84,3 +84,19 @@ def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 
     if not all_frames:
         return pd.DataFrame()
     return pd.concat(all_frames, ignore_index=True)
+
+
+def fetch_single_quote(code: str, period: str = "6mo") -> pd.DataFrame:
+    """1銘柄分の日足OHLCVを取得する(アプリのチャート表示など、都度リクエスト向け)。
+    列: Date, Open, High, Low, Close, Volume
+    """
+    ticker = f"{code}.T"
+    data = yf.download(tickers=ticker, period=period, interval="1d",
+                        progress=False, auto_adjust=False)
+    if data.empty:
+        return pd.DataFrame()
+    # yfinanceのバージョンによって単一銘柄でもMultiIndex列になる場合があるため平坦化する
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+    data = data.dropna(how="all").reset_index()
+    return data[["Date", "Open", "High", "Low", "Close", "Volume"]]
