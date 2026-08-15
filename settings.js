@@ -30,6 +30,16 @@ function selectField(id, label, value, options) {
     </div>`;
 }
 
+// シグナル別の通知ON/OFF設定に使うカテゴリ一覧(バックエンドのCATEGORY_PRIORITYと対応)
+const NOTIFY_CATEGORY_OPTIONS = [
+  { key: "oversold", label: "売られすぎ" },
+  { key: "overbought", label: "買われすぎ" },
+  { key: "golden_cross", label: "ゴールデンクロス" },
+  { key: "dead_cross", label: "デッドクロス" },
+  { key: "breakout", label: "値幅ブレイク" },
+  { key: "volume_surge", label: "出来高急増" },
+];
+
 function render(cfg) {
   formEl.innerHTML = `
     <div class="settings-section">
@@ -86,6 +96,18 @@ function render(cfg) {
       <p class="desc">※要 J-Quantsプレミアムプラン(ザラ場データが必要)。未契約の場合はオフのままにしてください</p>
       ${toggleField("ad_enabled", "この条件を有効にする", cfg.afternoon_drop.enabled)}
       ${numberField("ad_threshold", "下落率の閾値(%、マイナス値)", cfg.afternoon_drop.drop_threshold_pct, "0.1")}
+    </div>
+
+    <div class="settings-section">
+      <h2>通知するシグナル</h2>
+      <p class="desc">オフにしたカテゴリは一覧画面には表示されますが、プッシュ通知は送られません</p>
+      ${NOTIFY_CATEGORY_OPTIONS.map((o) =>
+        toggleField(
+          `notify_${o.key}`,
+          o.label,
+          (cfg.notification.notify_categories || []).includes(o.key)
+        )
+      ).join("")}
     </div>
 
     <div class="settings-section">
@@ -150,6 +172,9 @@ async function save(original) {
   cfg.min_avg_volume = Number(val("min_vol"));
   cfg.notification.max_items_per_message = Number(val("max_items"));
   cfg.notification.quiet_if_no_match = checked("quiet");
+  cfg.notification.notify_categories = NOTIFY_CATEGORY_OPTIONS
+    .filter((o) => checked(`notify_${o.key}`))
+    .map((o) => o.key);
 
   statusEl.textContent = "保存中...";
   try {
