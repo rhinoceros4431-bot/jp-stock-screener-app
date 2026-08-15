@@ -1,4 +1,4 @@
-const CACHE_NAME = "stock-screener-v2";
+const CACHE_NAME = "stock-screener-v3";
 const APP_SHELL = ["/", "/index.html", "/style.css", "/app.js", "/manifest.json", "/icon-192.png", "/icon-512.png", "/settings.html", "/settings.js"];
 
 self.addEventListener("install", (event) => {
