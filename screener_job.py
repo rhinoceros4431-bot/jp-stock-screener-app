@@ -28,14 +28,17 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def evaluate_stock(hist: pd.DataFrame, cfg: dict) -> list[str]:
+def evaluate_stock(hist: pd.DataFrame, cfg: dict) -> list[dict]:
+    """該当した条件を [{"type": ..., "label": ...}, ...] の形で返す。
+    type はアプリ側でシグナル別ブロック(買われすぎ/売られすぎ等)に振り分けるための分類キー。
+    """
     hist = hist.sort_values("Date")
     close = hist["Close"].astype(float)
     high = hist["High"].astype(float)
     low = hist["Low"].astype(float)
     volume = hist["Volume"].astype(float)
 
-    hits: list[str] = []
+    hits: list[dict] = []
 
     min_avg_vol = cfg.get("min_avg_volume", 0)
     if len(volume) >= 20 and volume.tail(20).mean() < min_avg_vol:
@@ -45,9 +48,9 @@ def evaluate_stock(hist: pd.DataFrame, cfg: dict) -> list[str]:
     if gc_cfg.get("enabled"):
         cross = ind.golden_dead_cross(close, gc_cfg["short_window"], gc_cfg["long_window"])
         if cross == "golden" and gc_cfg.get("notify_golden", True):
-            hits.append(f"ゴールデンクロス ({gc_cfg['short_window']}日線が{gc_cfg['long_window']}日線を上抜け)")
+            hits.append({"type": "golden_cross", "label": f"ゴールデンクロス ({gc_cfg['short_window']}日線が{gc_cfg['long_window']}日線を上抜け)"})
         if cross == "dead" and gc_cfg.get("notify_dead", True):
-            hits.append(f"デッドクロス ({gc_cfg['short_window']}日線が{gc_cfg['long_window']}日線を下抜け)")
+            hits.append({"type": "dead_cross", "label": f"デッドクロス ({gc_cfg['short_window']}日線が{gc_cfg['long_window']}日線を下抜け)"})
 
     ov_cfg = cfg["overheat_indicators"]
     if ov_cfg.get("enabled"):
@@ -56,41 +59,54 @@ def evaluate_stock(hist: pd.DataFrame, cfg: dict) -> list[str]:
             if not r.empty and not pd.isna(r.iloc[-1]):
                 val = r.iloc[-1]
                 if val <= ov_cfg["rsi"]["oversold"]:
-                    hits.append(f"RSI売られすぎ (RSI={val:.1f})")
+                    hits.append({"type": "oversold", "label": f"RSI売られすぎ (RSI={val:.1f})"})
                 elif val >= ov_cfg["rsi"]["overbought"]:
-                    hits.append(f"RSI買われすぎ (RSI={val:.1f})")
+                    hits.append({"type": "overbought", "label": f"RSI買われすぎ (RSI={val:.1f})"})
         if ov_cfg["stochastic"].get("enabled"):
             k, d = ind.stochastic(high, low, close, ov_cfg["stochastic"]["k_period"], ov_cfg["stochastic"]["d_period"])
             if not k.empty and not pd.isna(k.iloc[-1]):
                 val = k.iloc[-1]
                 if val <= ov_cfg["stochastic"]["oversold"]:
-                    hits.append(f"ストキャスティクス売られすぎ (%K={val:.1f})")
+                    hits.append({"type": "oversold", "label": f"ストキャスティクス売られすぎ (%K={val:.1f})"})
                 elif val >= ov_cfg["stochastic"]["overbought"]:
-                    hits.append(f"ストキャスティクス買われすぎ (%K={val:.1f})")
+                    hits.append({"type": "overbought", "label": f"ストキャスティクス買われすぎ (%K={val:.1f})"})
 
     vb_cfg = cfg["volume_breakout"]
     if vb_cfg.get("enabled"):
         vs_cfg = vb_cfg["volume_surge"]
         if vs_cfg.get("enabled") and ind.volume_surge(volume, vs_cfg["lookback_days"], vs_cfg["surge_multiple"]):
-            hits.append(f"出来高急増 (直近{vs_cfg['lookback_days']}日平均の{vs_cfg['surge_multiple']}倍以上)")
+            hits.append({"type": "volume_surge", "label": f"出来高急増 (直近{vs_cfg['lookback_days']}日平均の{vs_cfg['surge_multiple']}倍以上)"})
         pb_cfg = vb_cfg["price_breakout"]
         if pb_cfg.get("enabled"):
             b = ind.price_breakout(high, low, close, pb_cfg["lookback_days"], pb_cfg["breakout_type"])
             if b == "high":
-                hits.append(f"{pb_cfg['lookback_days']}日ぶり高値ブレイク")
+                hits.append({"type": "breakout", "label": f"{pb_cfg['lookback_days']}日ぶり高値ブレイク"})
             elif b == "low":
-                hits.append(f"{pb_cfg['lookback_days']}日ぶり安値ブレイク")
+                hits.append({"type": "breakout", "label": f"{pb_cfg['lookback_days']}日ぶり安値ブレイク"})
 
     bb_cfg = cfg["bollinger_band"]
     if bb_cfg.get("enabled"):
         upper, mid, lower = ind.bollinger_bands(close, bb_cfg["window"], bb_cfg["sigma"])
         if not upper.empty and not pd.isna(upper.iloc[-1]):
             if close.iloc[-1] > upper.iloc[-1]:
-                hits.append(f"ボリンジャーバンド+{bb_cfg['sigma']}σ突破")
+                hits.append({"type": "overbought", "label": f"ボリンジャーバンド+{bb_cfg['sigma']}σ突破"})
             elif close.iloc[-1] < lower.iloc[-1]:
-                hits.append(f"ボリンジャーバンド-{bb_cfg['sigma']}σ突破")
+                hits.append({"type": "oversold", "label": f"ボリンジャーバンド-{bb_cfg['sigma']}σ突破"})
 
     return hits
+
+
+# シグナル別ブロックの表示優先順(複数シグナルに該当する銘柄は、この順で最初に一致した
+# カテゴリのブロックに表示する)。
+CATEGORY_PRIORITY = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge"]
+
+
+def _pick_category(hits: list[dict]) -> str:
+    types = {h["type"] for h in hits}
+    for c in CATEGORY_PRIORITY:
+        if c in types:
+            return c
+    return "other"
 
 
 def run_screening() -> dict:
@@ -111,6 +127,7 @@ def run_screening() -> dict:
     print("[INFO] 上場銘柄一覧を取得中(JPX 無料データ)...")
     listed = univ.load_universe(cfg.get("target_markets") or None)
     code_to_name = dict(zip(listed["Code"], listed["CompanyName"]))
+    code_to_industry = dict(zip(listed["Code"], listed["Industry"])) if "Industry" in listed.columns else {}
     codes = listed["Code"].tolist()
     total = len(codes)
 
@@ -142,8 +159,17 @@ def run_screening() -> dict:
                     print(f"[WARN] {code} の評価中にエラー: {e}")
                     continue
                 if hits:
-                    results.append({"code": code, "name": code_to_name[code], "hits": hits})
+                    results.append({
+                        "code": code,
+                        "name": code_to_name[code],
+                        "industry": code_to_industry.get(code, "その他"),
+                        "category": _pick_category(hits),
+                        "score": len(hits),
+                        "hits": hits,
+                    })
         done_count += len(chunk_codes)
+        # より注目すべき(該当条件が多い)銘柄が上位に来るよう並び替えておく
+        results.sort(key=lambda r: -r["score"])
 
         partial_new = [r for r in results if r["code"] not in prev_codes]
         partial_output = {
@@ -156,6 +182,7 @@ def run_screening() -> dict:
         RESULTS_PATH.write_text(json.dumps(partial_output, ensure_ascii=False, indent=2), encoding="utf-8")
 
     now = dt.datetime.now().isoformat(timespec="seconds")
+    results.sort(key=lambda r: -r["score"])
     new_matches = [r for r in results if r["code"] not in prev_codes]
 
     output = {
