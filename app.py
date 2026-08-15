@@ -160,7 +160,22 @@ def api_run_now():
     # アプリ内の「今すぐ更新」ボタンから呼ばれる。個人利用の無料アプリのため
     # 管理者トークンは要求しない(以前はADMIN_TOKENを要求していたが、フロント側が
     # トークンを送っていなかったため常に401になり、更新ボタンが機能しないバグになっていた)。
-    threading.Thread(target=run_screening, daemon=True).start()
+    global _run_in_progress
+    with _run_lock:
+        if _run_in_progress:
+            return jsonify({"ok": True, "message": "スクリーニングは既に実行中です"})
+        _run_in_progress = True
+
+    def _job():
+        global _run_in_progress
+        try:
+            run_screening()
+        except Exception as e:
+            print(f"[MANUAL-TRIGGER] エラー: {e}")
+        finally:
+            _run_in_progress = False
+
+    threading.Thread(target=_job, daemon=True).start()
     return jsonify({"ok": True, "message": "スクリーニングを開始しました"})
 
 
