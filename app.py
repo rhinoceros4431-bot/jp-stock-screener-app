@@ -157,8 +157,9 @@ def api_set_config():
 
 @app.route("/api/run-now", methods=["POST"])
 def api_run_now():
-    if ADMIN_TOKEN and request.headers.get("X-Admin-Token") != ADMIN_TOKEN:
-        return jsonify({"error": "unauthorized"}), 401
+    # アプリ内の「今すぐ更新」ボタンから呼ばれる。個人利用の無料アプリのため
+    # 管理者トークンは要求しない(以前はADMIN_TOKENを要求していたが、フロント側が
+    # トークンを送っていなかったため常に401になり、更新ボタンが機能しないバグになっていた)。
     threading.Thread(target=run_screening, daemon=True).start()
     return jsonify({"ok": True, "message": "スクリーニングを開始しました"})
 
