@@ -10,23 +10,28 @@
   POST /api/run-now           手動でスクリーニングを即時実行(要ADMIN_TOKEN)
   GET  /api/config            現在の条件設定を取得
   POST /api/config            条件設定を更新
+  GET  /api/chart/<code>      個別銘柄のチャート用データ(タップ時に都度取得)
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import yaml
 from flask import Flask, jsonify, request, send_from_directory
 
 import db
+import indicators as ind
 import push
 from screener_job import CONFIG_PATH, RESULTS_PATH, run_screening
+from yfinance_client import fetch_single_quote
 
 BASE_DIR = Path(__file__).parent
 # フロントエンドのファイルもbackendと同じフォルダに置く構成(サブフォルダ構造を保ったまま
@@ -153,6 +158,42 @@ def api_set_config():
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.safe_dump(new_cfg, f, allow_unicode=True, sort_keys=False)
     return jsonify({"ok": True})
+
+
+CODE_RE = re.compile(r"^[0-9A-Za-z]{3,5}$")
+
+
+@app.route("/api/chart/<code>")
+def api_chart(code):
+    """銘柄タップ時にチャート表示用のデータを都度取得する(全銘柄分は保持していないため)。
+    yfinanceから1銘柄分だけ取得するので、全銘柄スクリーニングほどの負荷にはならない。"""
+    if not CODE_RE.match(code):
+        return jsonify({"error": "invalid code"}), 400
+    try:
+        hist = fetch_single_quote(code, period="6mo")
+    except Exception as e:
+        return jsonify({"error": f"取得に失敗しました: {e}"}), 502
+    if hist.empty:
+        return jsonify({"error": "no data"}), 404
+
+    hist = hist.sort_values("Date")
+    close = hist["Close"].astype(float)
+    ma5 = close.rolling(5, min_periods=1).mean()
+    ma25 = close.rolling(25, min_periods=1).mean()
+    rsi = ind.rsi(close, 14)
+
+    def _round_list(series):
+        return [None if pd.isna(v) else round(float(v), 2) for v in series]
+
+    return jsonify({
+        "code": code,
+        "dates": hist["Date"].dt.strftime("%Y-%m-%d").tolist(),
+        "close": _round_list(close),
+        "volume": [int(v) for v in hist["Volume"].fillna(0)],
+        "ma5": _round_list(ma5),
+        "ma25": _round_list(ma25),
+        "rsi": _round_list(rsi),
+    })
 
 
 @app.route("/api/run-now", methods=["POST"])
