@@ -23,9 +23,39 @@ const CATEGORY_META = {
 };
 const CATEGORY_ORDER = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge", "other"];
 
+const FAVORITES_KEY = "jpss_favorites";
+
 let lastData = null;
 let currentView = "signal";
 let priceChart = null;
+let favoriteCodes = loadFavorites();
+
+function loadFavorites() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FAVORITES_KEY) || "[]");
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function saveFavorites() {
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoriteCodes]));
+  } catch (e) {
+    /* ignore (プライベートモード等でlocalStorageが使えない場合) */
+  }
+}
+
+function toggleFavorite(code) {
+  if (favoriteCodes.has(code)) {
+    favoriteCodes.delete(code);
+  } else {
+    favoriteCodes.add(code);
+  }
+  saveFavorites();
+  renderCurrentView();
+}
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -87,15 +117,25 @@ function buildCard(r, rank, newSet) {
   card.dataset.code = r.code;
   card.dataset.name = r.name;
   const isNew = newSet.has(r.code) ? '<span class="badge-new">NEW</span>' : "";
+  const isFav = favoriteCodes.has(r.code);
   card.innerHTML = `
     <div class="name-row">
       <span class="rank-badge">#${rank}</span>
+      <button class="fav-star${isFav ? " active" : ""}" data-code="${r.code}" aria-label="お気に入り登録">${isFav ? "★" : "☆"}</button>
       <span class="name">${r.name}${isNew}</span>
       <span class="code">${r.code}</span>
     </div>
     <ul>${hitsHtmlOf(r)}</ul>
   `;
   return card;
+}
+
+// シグナル種別ごとの過去の的中率(直近のサーバー稼働中に記録された分のみの参考値)。
+function statsHtmlOf(data, cat) {
+  const stats = data.signal_stats && data.signal_stats[cat];
+  if (!stats || !stats.total) return "";
+  const sign = stats.avg_return_pct > 0 ? "+" : "";
+  return `<div class="section-stats">参考: 過去の的中率 ${stats.win_rate}%(${stats.total}件、平均${sign}${stats.avg_return_pct}%) ※サーバー再起動でリセットされる簡易集計です</div>`;
 }
 
 function renderBySignal(data) {
@@ -118,6 +158,7 @@ function renderBySignal(data) {
     section.innerHTML = `
       <h2 class="section-title"><span>${meta.title}</span><span class="section-count">${list.length}件</span></h2>
       ${meta.hint ? `<div class="section-hint">${meta.hint}</div>` : ""}
+      ${statsHtmlOf(data, cat)}
     `;
     list.forEach((r, i) => section.appendChild(buildCard(r, i + 1, newSet)));
     resultsEl.appendChild(section);
@@ -125,6 +166,64 @@ function renderBySignal(data) {
   if (!renderedAny) {
     resultsEl.innerHTML = emptyStateHtml(data);
   }
+}
+
+function renderHeatmap(data) {
+  resultsEl.innerHTML = "";
+  const groups = {};
+  for (const r of data.results) {
+    const theme = r.industry || "不明";
+    const g = (groups[theme] = groups[theme] || { total: 0, bullish: 0, bearish: 0 });
+    g.total += 1;
+    if (r.category === "oversold" || r.category === "golden_cross") g.bullish += 1;
+    if (r.category === "overbought" || r.category === "dead_cross") g.bearish += 1;
+  }
+  const themes = Object.keys(groups).sort((a, b) => groups[b].total - groups[a].total);
+  if (themes.length === 0) {
+    resultsEl.innerHTML = emptyStateHtml(data);
+    return;
+  }
+  const note = document.createElement("div");
+  note.className = "section-hint";
+  note.textContent = "業種ごとの該当件数。緑=売られすぎ/ゴールデンクロスが優勢、赤=買われすぎ/デッドクロスが優勢、色が濃いほど件数が多い";
+  resultsEl.appendChild(note);
+
+  const maxTotal = Math.max(...themes.map((t) => groups[t].total));
+  const grid = document.createElement("div");
+  grid.className = "heatmap-grid";
+  for (const theme of themes) {
+    const g = groups[theme];
+    const net = g.bullish - g.bearish;
+    const intensity = maxTotal ? Math.min(1, g.total / maxTotal) : 0;
+    const hue = net >= 0 ? 142 : 0;
+    const alpha = 0.12 + intensity * 0.58;
+    const cell = document.createElement("div");
+    cell.className = "heatmap-cell";
+    cell.style.background = `hsla(${hue}, 70%, 45%, ${alpha})`;
+    cell.innerHTML = `
+      <div class="heatmap-theme">${theme}</div>
+      <div class="heatmap-count">${g.total}件</div>
+      <div class="heatmap-detail">強気${g.bullish} / 弱気${g.bearish}</div>
+    `;
+    grid.appendChild(cell);
+  }
+  resultsEl.appendChild(grid);
+}
+
+function renderFavorites(data) {
+  resultsEl.innerHTML = "";
+  const list = data.results.filter((r) => favoriteCodes.has(r.code));
+  if (list.length === 0) {
+    resultsEl.innerHTML = '<div class="empty-state">まだお気に入りに追加した銘柄がありません。銘柄カードの☆をタップすると追加できます。</div>';
+    return;
+  }
+  list.sort((a, b) => scoreOf(b) - scoreOf(a));
+  const newSet = new Set(data.new_match_codes || []);
+  const section = document.createElement("section");
+  section.className = "result-section";
+  section.innerHTML = `<h2 class="section-title"><span>お気に入り</span><span class="section-count">${list.length}件</span></h2>`;
+  list.forEach((r, i) => section.appendChild(buildCard(r, i + 1, newSet)));
+  resultsEl.appendChild(section);
 }
 
 function renderByTheme(data) {
@@ -154,6 +253,10 @@ function renderCurrentView() {
   if (!lastData) return;
   if (currentView === "theme") {
     renderByTheme(lastData);
+  } else if (currentView === "heatmap") {
+    renderHeatmap(lastData);
+  } else if (currentView === "favorites") {
+    renderFavorites(lastData);
   } else {
     renderBySignal(lastData);
   }
@@ -189,6 +292,12 @@ async function loadResults() {
 // 銘柄カードのタップでチャートを表示(結果の再描画のたびにリスナーを付け直さなくて済むよう、
 // resultsEl自体にイベント委任している)。
 resultsEl.addEventListener("click", (e) => {
+  const star = e.target.closest(".fav-star");
+  if (star) {
+    e.stopPropagation();
+    toggleFavorite(star.dataset.code);
+    return;
+  }
   const card = e.target.closest(".stock-card");
   if (!card) return;
   openChartModal(card.dataset.code, card.dataset.name);
