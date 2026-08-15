@@ -77,7 +77,11 @@ refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   statusText.textContent = "スクリーニングを開始しました(数分かかります)...";
   try {
-    await fetch("/api/run-now", { method: "POST" });
+    const resp = await fetch("/api/run-now", { method: "POST" });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      statusText.textContent = "エラー: " + (data.error || resp.status);
+    }
   } catch (e) {
     statusText.textContent = "エラー: " + e.message;
   }
