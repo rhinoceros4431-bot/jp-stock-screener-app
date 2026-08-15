@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 import indicators as ind
+import signal_stats
 import universe as univ
 from yfinance_client import fetch_daily_quotes_chunks
 
@@ -80,9 +81,9 @@ def evaluate_stock(hist: pd.DataFrame, cfg: dict) -> list[dict]:
         if pb_cfg.get("enabled"):
             b = ind.price_breakout(high, low, close, pb_cfg["lookback_days"], pb_cfg["breakout_type"])
             if b == "high":
-                hits.append({"type": "breakout", "label": f"{pb_cfg['lookback_days']}日ぶり高値ブレイク"})
+                hits.append({"type": "breakout", "label": f"{pb_cfg['lookback_days']}日ぶり高値ブレイク", "direction": "up"})
             elif b == "low":
-                hits.append({"type": "breakout", "label": f"{pb_cfg['lookback_days']}日ぶり安値ブレイク"})
+                hits.append({"type": "breakout", "label": f"{pb_cfg['lookback_days']}日ぶり安値ブレイク", "direction": "down"})
 
     bb_cfg = cfg["bollinger_band"]
     if bb_cfg.get("enabled"):
@@ -107,6 +108,17 @@ def _pick_category(hits: list[dict]) -> str:
         if c in types:
             return c
     return "other"
+
+
+def _pick_direction(hits: list[dict], category: str) -> str | None:
+    """シグナル的中率の答え合わせ用に、そのカテゴリで「期待する値動きの向き」を1つ選ぶ。
+    breakout(値幅ブレイク)は高値/安値どちらのブレイクかでhit側にdirectionを持たせている。"""
+    if category in signal_stats.CATEGORY_DIRECTION:
+        return signal_stats.CATEGORY_DIRECTION[category]
+    for h in hits:
+        if h["type"] == category and h.get("direction"):
+            return h["direction"]
+    return None
 
 
 def run_screening() -> dict:
@@ -144,6 +156,8 @@ def run_screening() -> dict:
 
     results = []
     done_count = 0
+    # シグナル的中率の答え合わせ(signal_stats)用に、該当有無にかかわらず全銘柄の最新終値を集める
+    price_map: dict[str, float] = {}
     # 全銘柄の取得完了(15-30分程度かかる)を待たず、チャンク(150銘柄)ごとに
     # 途中経過をresults_latest.jsonへ書き出す。これによりアプリ側は実行中も
     # 「何も表示されない」状態にならず、その時点までの該当銘柄と進捗を表示できる。
@@ -153,17 +167,23 @@ def run_screening() -> dict:
             for code, hist in grouped:
                 if code not in code_to_name:
                     continue
+                hist_sorted = hist.sort_values("Date")
+                close_series = hist_sorted["Close"].astype(float).dropna()
+                if not close_series.empty:
+                    price_map[code] = float(close_series.iloc[-1])
                 try:
                     hits = evaluate_stock(hist, cfg)
                 except Exception as e:
                     print(f"[WARN] {code} の評価中にエラー: {e}")
                     continue
                 if hits:
+                    category = _pick_category(hits)
                     results.append({
                         "code": code,
                         "name": code_to_name[code],
                         "industry": code_to_industry.get(code, "その他"),
-                        "category": _pick_category(hits),
+                        "category": category,
+                        "direction": _pick_direction(hits, category),
                         "score": len(hits),
                         "hits": hits,
                     })
@@ -181,9 +201,19 @@ def run_screening() -> dict:
         }
         RESULTS_PATH.write_text(json.dumps(partial_output, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    now = dt.datetime.now().isoformat(timespec="seconds")
+    now_dt = dt.datetime.now()
+    now = now_dt.isoformat(timespec="seconds")
     results.sort(key=lambda r: -r["score"])
     new_matches = [r for r in results if r["code"] not in prev_codes]
+
+    # シグナル的中率の記録・答え合わせ(サーバー再起動でリセットされる簡易集計。詳細はsignal_stats.py参照)
+    try:
+        signal_stats.record_new_signals(new_matches, price_map, now_dt.date().isoformat())
+        history = signal_stats.resolve_pending(price_map, now_dt.date())
+        stats = signal_stats.summarize(history)
+    except Exception as e:
+        print(f"[WARN] シグナル的中率の集計に失敗しました: {e}")
+        stats = {}
 
     output = {
         "updated_at": now,
@@ -191,15 +221,24 @@ def run_screening() -> dict:
         "new_match_codes": [r["code"] for r in new_matches],
         "status": "done",
         "progress": {"done": total, "total": total},
+        "signal_stats": stats,
     }
     RESULTS_PATH.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[INFO] スクリーニング完了: {len(results)}銘柄該当 (うち新規{len(new_matches)}銘柄)")
 
-    if new_matches:
-        names = "、".join(f"{r['name']}({r['code']})" for r in new_matches[:10])
-        more = f" 他{len(new_matches) - 10}銘柄" if len(new_matches) > 10 else ""
+    # 通知するシグナルカテゴリを設定で絞り込む(一覧画面には全カテゴリ表示されるが、
+    # 通知が来るのはここで有効になっているカテゴリのみ)
+    notify_categories = set(
+        cfg.get("notification", {}).get("notify_categories")
+        or (CATEGORY_PRIORITY + ["other"])
+    )
+    notify_matches = [r for r in new_matches if r["category"] in notify_categories]
+
+    if notify_matches:
+        names = "、".join(f"{r['name']}({r['code']})" for r in notify_matches[:10])
+        more = f" 他{len(notify_matches) - 10}銘柄" if len(notify_matches) > 10 else ""
         push.send_to_all(
-            title=f"株スクリーニング: {len(new_matches)}銘柄が新たに該当",
+            title=f"株スクリーニング: {len(notify_matches)}銘柄が新たに該当",
             body=f"{names}{more}",
             url="/",
         )
