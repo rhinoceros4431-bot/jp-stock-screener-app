@@ -21,15 +21,17 @@ except ImportError as e:
     ) from e
 
 
-def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 100,
-                        sleep_between: float = 1.0) -> pd.DataFrame:
-    """複数銘柄の日足OHLCVをまとめて取得し、J-Quants版と同じ列構成のDataFrameに変換する。
-    列: Code, Date, Open, High, Low, Close, Volume
+def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size: int = 150,
+                               sleep_between: float = 0.7):
+    """複数銘柄の日足OHLCVをチャンク単位で取得し、チャンクごとに (chunk_codes, DataFrame) を
+    yield するジェネレータ。呼び出し側がチャンク完了ごとに途中経過を保存できるようにするため、
+    全件まとめて返す fetch_daily_quotes ではなくこちらを主に使う。
+    DataFrameの列: Code, Date, Open, High, Low, Close, Volume
     """
-    all_frames = []
     for i in range(0, len(codes), chunk_size):
         chunk = codes[i:i + chunk_size]
         tickers = [f"{c}.T" for c in chunk]
+        frames = []
         try:
             data = yf.download(
                 tickers=tickers,
@@ -43,6 +45,7 @@ def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 
         except Exception as e:
             print(f"[WARN] チャンク {i}-{i+chunk_size} の取得に失敗: {e}")
             time.sleep(sleep_between)
+            yield chunk, pd.DataFrame()
             continue
 
         for code, ticker in zip(chunk, tickers):
@@ -60,11 +63,24 @@ def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 
             sub["Code"] = code
             sub = sub.rename(columns={"Date": "Date", "Open": "Open", "High": "High",
                                         "Low": "Low", "Close": "Close", "Volume": "Volume"})
-            all_frames.append(sub[["Code", "Date", "Open", "High", "Low", "Close", "Volume"]])
+            frames.append(sub[["Code", "Date", "Open", "High", "Low", "Close", "Volume"]])
 
         print(f"[INFO] {min(i + chunk_size, len(codes))}/{len(codes)} 銘柄 取得完了")
+        yield chunk, (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame())
         time.sleep(sleep_between)
 
+
+def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 150,
+                        sleep_between: float = 0.7) -> pd.DataFrame:
+    """複数銘柄の日足OHLCVをまとめて取得し、J-Quants版と同じ列構成のDataFrameに変換する。
+    列: Code, Date, Open, High, Low, Close, Volume
+    (途中経過が不要な用途向けの一括版。通常のスクリーニング実行では
+    fetch_daily_quotes_chunks を使う)
+    """
+    all_frames = [df for _, df in fetch_daily_quotes_chunks(codes, period=period,
+                                                              chunk_size=chunk_size,
+                                                              sleep_between=sleep_between)
+                  if not df.empty]
     if not all_frames:
         return pd.DataFrame()
     return pd.concat(all_frames, ignore_index=True)
