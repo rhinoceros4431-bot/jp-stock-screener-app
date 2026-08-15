@@ -78,3 +78,11 @@ afternoon_drop:
 notification:
   max_items_per_message: 30   # LINE 1通あたりに詰め込む最大銘柄数(超えたら分割送信)
   quiet_if_no_match: true     # 該当銘柄がゼロのときは通知を送らない
+  # プッシュ通知を送るシグナルカテゴリ(ここに無いカテゴリは、一覧画面には表示されるが通知は送らない)
+  notify_categories:
+    - oversold
+    - overbought
+    - golden_cross
+    - dead_cross
+    - breakout
+    - volume_surge
