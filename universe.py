@@ -40,8 +40,8 @@ def _find_xls_url() -> str:
 
 
 def load_universe(target_markets: list[str] | None = None) -> pd.DataFrame:
-    """全上場銘柄(コード・銘柄名・市場区分)のDataFrameを返す。
-    列: Code, CompanyName, MarketSegment, MarketCode
+    """全上場銘柄(コード・銘柄名・市場区分・業種)のDataFrameを返す。
+    列: Code, CompanyName, MarketSegment, MarketCode, Industry
     """
     url = _find_xls_url()
     resp = requests.get(url, timeout=30)
@@ -52,12 +52,19 @@ def load_universe(target_markets: list[str] | None = None) -> pd.DataFrame:
     col_code = next(c for c in df.columns if "コード" == str(c).strip())
     col_name = next(c for c in df.columns if "銘柄名" == str(c).strip())
     col_market = next(c for c in df.columns if "市場・商品区分" in str(c))
+    # 33業種区分(JPXの無料データに含まれる業種分類)。「テーマ別」表示に使う。
+    col_industry = next((c for c in df.columns if "33業種区分" in str(c)), None)
 
     out = pd.DataFrame({
         "Code": df[col_code].astype(str).str.strip(),
         "CompanyName": df[col_name].astype(str).str.strip(),
         "MarketSegment": df[col_market].astype(str).str.strip(),
     })
+    if col_industry is not None:
+        industry = df[col_industry].astype(str).str.strip()
+        out["Industry"] = industry.replace({"nan": "その他", "-": "その他", "": "その他"})
+    else:
+        out["Industry"] = "その他"
     out["MarketCode"] = out["MarketSegment"].map(MARKET_NAME_MAP)
 
     # ETF/REIT/優先株など普通株以外の行を除外(市場区分が上記マップに無いものは除く)
