@@ -64,9 +64,25 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
 }
 
+// 新しいバージョンのservice-worker.jsが有効化されたら、開いたままのタブでも
+// 自動的にリロードして最新のapp.js/index.html/style.cssを反映する。
+// (これが無いと「更新したはずなのに古い画面のまま」という状態が、タブを手動で
+// 閉じ直すまで続いてしまう)
+let _swRefreshing = false;
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (_swRefreshing) return;
+    _swRefreshing = true;
+    window.location.reload();
+  });
+}
+
 async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return null;
-  return navigator.serviceWorker.register("/service-worker.js");
+  const reg = await navigator.serviceWorker.register("/service-worker.js");
+  // ページを開いたまま長時間放置されるケースもあるため、定期的に更新の有無を確認する
+  setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+  return reg;
 }
 
 async function subscribeToPush() {
