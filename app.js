@@ -1,6 +1,5 @@
 const statusText = document.getElementById("status-text");
 const subscribeBtn = document.getElementById("subscribe-btn");
-const refreshBtn = document.getElementById("refresh-btn");
 const updatedAtEl = document.getElementById("updated-at");
 const summaryEl = document.getElementById("summary");
 const resultsEl = document.getElementById("results");
@@ -9,6 +8,7 @@ const chartModal = document.getElementById("chart-modal");
 const chartModalBody = document.getElementById("chart-modal-body");
 const chartModalBackdrop = document.getElementById("chart-modal-backdrop");
 const chartModalClose = document.getElementById("chart-modal-close");
+const pullIndicator = document.getElementById("pull-indicator");
 
 // シグナル別ブロックの表示順・見出し・簡単な説明。
 // バックエンド(screener_job.py)の CATEGORY_PRIORITY と対応させている。
@@ -24,11 +24,33 @@ const CATEGORY_META = {
 const CATEGORY_ORDER = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge", "other"];
 
 const FAVORITES_KEY = "jpss_favorites";
+const RESULTS_CACHE_KEY = "jpss_results_cache";
 
 let lastData = null;
 let currentView = "signal";
 let priceChart = null;
 let favoriteCodes = loadFavorites();
+
+// アプリを開いた瞬間から「何も表示されない」状態にならないよう、前回取得できた結果を
+// 端末に保存しておき、起動直後はまずそれを表示する(裏で最新データの取得は継続する)　
+function loadCachedResults() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RESULTS_CACHE_KEY) || "null");
+    return raw && Array.isArray(raw.results) ? raw : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveCachedResults(data) {
+  try {
+    if (data && Array.isArray(data.results) && data.results.length > 0) {
+      localStorage.setItem(RESULTS_CACHE_KEY, JSON.stringify(data));
+    }
+  } catch (e) {
+    /* ignore (プライベートモード等でlocalStorageが使えない場合) */
+  }
+}
 
 function loadFavorites() {
   try {
@@ -290,6 +312,7 @@ viewTabs.forEach((btn) => {
 async function loadResults() {
   const data = await fetch("/api/results").then((r) => r.json());
   lastData = data;
+  saveCachedResults(data);
   const isRunning = data.status === "running";
   const progress = data.progress || {};
 
@@ -303,6 +326,18 @@ async function loadResults() {
 
   renderCurrentView();
   return data.status;
+}
+
+// 起動直後、サーバーからの応答を待たずに前回結果をまず表示する
+function showCachedResultsImmediately() {
+  const cached = loadCachedResults();
+  if (!cached) return;
+  lastData = cached;
+  updatedAtEl.textContent = cached.updated_at
+    ? `最終更新: ${cached.updated_at.replace("T", " ")}(前回取得分。最新データを取得中...)`
+    : "前回取得分を表示中(最新データを取得中...)";
+  summaryEl.textContent = `該当銘柄: ${cached.results.length}件(前回取得分)`;
+  renderCurrentView();
 }
 
 // 銘柄カードのタップでチャートを表示(結果の再描画のたびにリスナーを付け直さなくて済むよう、
@@ -329,6 +364,7 @@ async function openChartModal(code, name) {
     </div>
     <div class="chart-wrap"><canvas id="price-chart" height="220"></canvas></div>
     <div class="empty-state" id="chart-loading">チャートを読み込み中...</div>
+    <div id="pattern-match-section"></div>
   `;
   try {
     const data = await fetch(`/api/chart/${encodeURIComponent(code)}`).then((r) => r.json());
@@ -339,10 +375,41 @@ async function openChartModal(code, name) {
     }
     if (loading) loading.remove();
     renderPriceChart(data);
+    renderPatternMatch(data.pattern_match);
   } catch (e) {
     const loading = document.getElementById("chart-loading");
     if (loading) loading.textContent = "チャートの取得に失敗しました。";
   }
+}
+
+// 直近の値動きと似た過去局面、その後の値動きの参考情報を表示する
+function renderPatternMatch(pm) {
+  const el = document.getElementById("pattern-match-section");
+  if (!el) return;
+  if (!pm || !pm.available) {
+    el.innerHTML = `
+      <div class="pattern-match-box">
+        <h3>過去の類似パターン</h3>
+        <div class="section-hint">十分に似た過去の値動きが見つかりませんでした(上場から日が浅い、または最近の値動きに近い過去局面が少ない銘柄など)。</div>
+      </div>
+    `;
+    return;
+  }
+  const sign = pm.avg_forward_return_pct > 0 ? "+" : "";
+  const casesHtml = pm.cases
+    .map((c) => {
+      const csign = c.forward_return_pct > 0 ? "+" : "";
+      return `<li>${c.date || "-"}頃(類似度${c.similarity_pct}%) → ${pm.forward_days}日後の騰落率 ${csign}${c.forward_return_pct}%</li>`;
+    })
+    .join("");
+  el.innerHTML = `
+    <div class="pattern-match-box">
+      <h3>過去の類似パターン(直近${pm.window_days}日の値動きと比較)</h3>
+      <div class="section-stats">類似局面 ${pm.sample_count}件(平均類似度${pm.avg_similarity_pct}%) → その後${pm.forward_days}日で上昇した割合 ${pm.win_rate_pct}%(平均騰落率 ${sign}${pm.avg_forward_return_pct}%)</div>
+      <ul class="pattern-case-list">${casesHtml}</ul>
+      <div class="section-hint">※直近${pm.window_days}日間の値動きの「形」が過去のどの局面に似ているかを機械的に計算しただけの参考情報です。将来の値動きを保証するものではありません。</div>
+    </div>
+  `;
 }
 
 function renderPriceChart(data) {
@@ -390,8 +457,13 @@ subscribeBtn.addEventListener("click", () => subscribeToPush().catch((e) => {
   statusText.textContent = "エラー: " + e.message;
 }));
 
-refreshBtn.addEventListener("click", async () => {
-  refreshBtn.disabled = true;
+let _refreshInProgress = false;
+
+// 「今すぐ更新」ボタンの代わりに、画面を一番上までスクロールした状態から下に
+// 引っ張る(プルリフレッシュ)と更新が始まるようにする。
+async function triggerRefresh() {
+  if (_refreshInProgress) return;
+  _refreshInProgress = true;
   statusText.textContent = "スクリーニングを開始しました。数十秒〜数分で途中経過が表示され始めます...";
   try {
     const resp = await fetch("/api/run-now", { method: "POST" });
@@ -405,7 +477,67 @@ refreshBtn.addEventListener("click", async () => {
   } catch (e) {
     statusText.textContent = "エラー: " + e.message;
   }
-  refreshBtn.disabled = false;
+  _refreshInProgress = false;
+}
+
+// --- プルリフレッシュ(下に引っ張って更新)---
+const PULL_THRESHOLD = 70;
+const PULL_MAX = 120;
+let pullStartY = null;
+let pullDist = 0;
+let pullActive = false;
+
+function resetPullIndicator() {
+  pullIndicator.style.transform = "translateY(-100%)";
+  pullIndicator.style.opacity = "0";
+  pullDist = 0;
+  pullActive = false;
+}
+
+document.addEventListener(
+  "touchstart",
+  (e) => {
+    const modalOpen = chartModal && !chartModal.classList.contains("hidden");
+    if (window.scrollY <= 0 && !_refreshInProgress && !modalOpen) {
+      pullStartY = e.touches[0].clientY;
+    } else {
+      pullStartY = null;
+    }
+  },
+  { passive: true }
+);
+
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (pullStartY === null) return;
+    const dy = e.touches[0].clientY - pullStartY;
+    if (dy > 0 && window.scrollY <= 0) {
+      pullActive = true;
+      pullDist = Math.min(dy, PULL_MAX);
+      pullIndicator.style.transform = `translateY(${pullDist}px)`;
+      pullIndicator.style.opacity = String(Math.min(1, pullDist / PULL_THRESHOLD));
+      pullIndicator.textContent = pullDist > PULL_THRESHOLD ? "離すと更新します" : "↓ 引っ張って更新";
+    }
+  },
+  { passive: true }
+);
+
+document.addEventListener("touchend", () => {
+  if (pullActive) {
+    if (pullDist > PULL_THRESHOLD) {
+      pullIndicator.textContent = "更新中...";
+      pullIndicator.style.transform = "translateY(0)";
+      pullIndicator.style.opacity = "1";
+      triggerRefresh().finally(() => {
+        setTimeout(resetPullIndicator, 600);
+      });
+    } else {
+      resetPullIndicator();
+    }
+  }
+  pullStartY = null;
+  pullActive = false;
 });
 
 let pollTimer = null;
@@ -433,5 +565,6 @@ async function scheduleNextLoad(immediate) {
   }
 }
 
+showCachedResultsImmediately();
 registerServiceWorker();
 scheduleNextLoad(true);
