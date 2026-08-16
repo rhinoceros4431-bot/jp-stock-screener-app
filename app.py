@@ -29,6 +29,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import db
 import indicators as ind
+import pattern_match
 import push
 from screener_job import CONFIG_PATH, RESULTS_PATH, run_screening
 from yfinance_client import fetch_single_quote
@@ -72,194 +73,5 @@ _run_in_progress = False
 
 def _maybe_trigger_run():
     """前回実行から十分な時間が経っていれば、バックグラウンドでスクリーニングを実行する。
-    Render等の無料枠でプロセスがスリープ/再起動してもここでリカバリできるよう、
-    アクセス(/api/results, /api/ping)のたびにこのチェックを行う。"""
-    global _run_in_progress
-    now = dt.datetime.now(JST)
-    if not (_is_market_hours(now) or os.environ.get("IGNORE_MARKET_HOURS") == "1"):
-        return
-    with _run_lock:
-        if _run_in_progress:
-            return
-        stale = True
-        if RESULTS_PATH.exists():
-            try:
-                data = json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
-                last = dt.datetime.fromisoformat(data["updated_at"])
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=JST)
-                stale = (now - last) >= dt.timedelta(minutes=RUN_INTERVAL_MINUTES)
-            except Exception:
-                stale = True
-        if not stale:
-            return
-        _run_in_progress = True
-
-    def _job():
-        global _run_in_progress
-        try:
-            print("[REQUEST-TRIGGERED] スクリーニングを実行します")
-            run_screening()
-        except Exception as e:
-            print(f"[REQUEST-TRIGGERED] エラー: {e}")
-        finally:
-            _run_in_progress = False
-
-    threading.Thread(target=_job, daemon=True).start()
-
-
-# ---------------- API ----------------
-@app.route("/api/ping")
-def api_ping():
-    """外部の無料稼働監視サービス(UptimeRobot等)からの定期アクセス用。
-    アプリをスリープさせない目的と、遅延実行のトリガーを兼ねる。"""
-    _maybe_trigger_run()
-    return jsonify({"ok": True})
-
-
-@app.route("/api/results")
-def api_results():
-    _maybe_trigger_run()
-    if not RESULTS_PATH.exists():
-        return jsonify({"updated_at": None, "results": [], "new_match_codes": []})
-    return jsonify(json.loads(RESULTS_PATH.read_text(encoding="utf-8")))
-
-
-@app.route("/api/vapid-public-key")
-def api_vapid_public_key():
-    return jsonify({"publicKey": VAPID_PUBLIC_KEY})
-
-
-@app.route("/api/subscribe", methods=["POST"])
-def api_subscribe():
-    sub = request.get_json(force=True)
-    endpoint = sub["endpoint"]
-    keys = sub["keys"]
-    db.add_subscription(endpoint, keys["p256dh"], keys["auth"])
-    return jsonify({"ok": True})
-
-
-@app.route("/api/unsubscribe", methods=["POST"])
-def api_unsubscribe():
-    sub = request.get_json(force=True)
-    db.remove_subscription(sub["endpoint"])
-    return jsonify({"ok": True})
-
-
-@app.route("/api/config", methods=["GET"])
-def api_get_config():
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return jsonify(yaml.safe_load(f))
-
-
-@app.route("/api/config", methods=["POST"])
-def api_set_config():
-    new_cfg = request.get_json(force=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.safe_dump(new_cfg, f, allow_unicode=True, sort_keys=False)
-    return jsonify({"ok": True})
-
-
-CODE_RE = re.compile(r"^[0-9A-Za-z]{3,5}$")
-
-
-@app.route("/api/chart/<code>")
-def api_chart(code):
-    """銘柄タップ時にチャート表示用のデータを都度取得する(全銘柄分は保持していないため)。
-    yfinanceから1銘柄分だけ取得するので、全銘柄スクリーニングほどの負荷にはならない。"""
-    if not CODE_RE.match(code):
-        return jsonify({"error": "invalid code"}), 400
-    try:
-        hist = fetch_single_quote(code, period="6mo")
-    except Exception as e:
-        return jsonify({"error": f"取得に失敗しました: {e}"}), 502
-    if hist.empty:
-        return jsonify({"error": "no data"}), 404
-
-    hist = hist.sort_values("Date")
-    close = hist["Close"].astype(float)
-    ma5 = close.rolling(5, min_periods=1).mean()
-    ma25 = close.rolling(25, min_periods=1).mean()
-    rsi = ind.rsi(close, 14)
-
-    def _round_list(series):
-        return [None if pd.isna(v) else round(float(v), 2) for v in series]
-
-    return jsonify({
-        "code": code,
-        "dates": hist["Date"].dt.strftime("%Y-%m-%d").tolist(),
-        "close": _round_list(close),
-        "volume": [int(v) for v in hist["Volume"].fillna(0)],
-        "ma5": _round_list(ma5),
-        "ma25": _round_list(ma25),
-        "rsi": _round_list(rsi),
-    })
-
-
-@app.route("/api/run-now", methods=["POST"])
-def api_run_now():
-    # アプリ内の「今すぐ更新」ボタンから呼ばれる。個人利用の無料アプリのため
-    # 管理者トークンは要求しない(以前はADMIN_TOKENを要求していたが、フロント側が
-    # トークンを送っていなかったため常に401になり、更新ボタンが機能しないバグになっていた)。
-    global _run_in_progress
-    with _run_lock:
-        if _run_in_progress:
-            return jsonify({"ok": True, "message": "スクリーニングは既に実行中です"})
-        _run_in_progress = True
-
-    def _job():
-        global _run_in_progress
-        try:
-            run_screening()
-        except Exception as e:
-            print(f"[MANUAL-TRIGGER] エラー: {e}")
-        finally:
-            _run_in_progress = False
-
-    threading.Thread(target=_job, daemon=True).start()
-    return jsonify({"ok": True, "message": "スクリーニングを開始しました"})
-
-
-JST = ZoneInfo("Asia/Tokyo")
-
-
-def _is_market_hours(now: dt.datetime) -> bool:
-    """平日 9:00-15:30 (JST) の間だけ True。土日祝や時間外は無駄な実行をしない。
-    ※日本の祝日判定は行っていない簡易版(祝日にも1回無駄に実行される程度で実害は小さい)。"""
-    if now.weekday() >= 5:  # 5=土, 6=日
-        return False
-    t = now.time()
-    return dt.time(9, 0) <= t <= dt.time(15, 30)
-
-
-# ---------------- バックグラウンドスケジューラ ----------------
-def _scheduler_loop():
-    while True:
-        now = dt.datetime.now(JST)
-        if _is_market_hours(now) or os.environ.get("IGNORE_MARKET_HOURS") == "1":
-            try:
-                print("[SCHEDULER] スクリーニングを実行します")
-                run_screening()
-            except Exception as e:
-                print(f"[SCHEDULER] エラー: {e}")
-        else:
-            print("[SCHEDULER] 市場時間外のためスキップ")
-        time.sleep(RUN_INTERVAL_MINUTES * 60)
-
-
-def start_scheduler():
-    # 注意: このスケジューラはアプリプロセス内のスレッドとして動きます。
-    # gunicorn等でワーカー数を2以上にすると、その数だけスクリーニング/通知が重複実行されます。
-    # Procfileではワーカー数を1に固定しています(スケール時は外部cronに切り出してください)。
-    if os.environ.get("DISABLE_SCHEDULER") == "1":
-        return
-    t = threading.Thread(target=_scheduler_loop, daemon=True)
-    t.start()
-
-
-db.init_db()
-start_scheduler()
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port)
+    Render等の無料枠でプローザヅははィフクを問題いろく、经゠ウーダエンホヵュう8�x*>8�8(����"" �v��&��'V�����&�w&W70���r�GB�FFWF��R���r��5B���b��B���5��&�WE���W'2���r��"�2�V�f�&���vWB�$�t��$U��$�UE��U%2"���#"���&WGW&�v�F��'V����6����b�'V�����&�w&W73��&WGW&�7F�R�G'VP��b$U5T�E5�D��W��7G2����G'���FF��6�����G2�$U5T�E5�D��&VE�FW�B�V�6�F��s�'WFbӂ"����7B�GB�FFWF��R�g&�֗6�f�&�B�FF�'WFFVE�B%Ґ��b�7B�G���f��2���S���7B��7B�&W�6R�G���f�ԥ5B��7F�R����r��7B���GB�F��VFV�F�֖�WFW3�%T����DU%d��Ԕ�UDU2��W�6WBW�6WF��㠢7F�R�G'VP��b��B7F�S��&WGW&��'V�����&�w&W72�G'VP��FVb���"����v��&��'V�����&�w&W70�G'���&��B�%�$UTU5B�E$�ttU$TE�8+�8*�8:�8;�88�8;>8+8).Z����8~8�8�"��'V��67&VV��r���W�6WBW�6WF���2S��&��B�b%�$UTU5B�E$�ttU$TE�8*�8:�8;â�W�"��f���Ǔ���'V�����&�w&W72�f�6P��F�&VF��r�F�&VB�F&vWC����"�FV����G'VR��7F'B�����2��������������������������������Ф�&�WFR�"�����r"��FVb����r����"".ZIn�:�8�xJii�z��X8�y�>�in8+^8;�89>8+��WF��U&�&�Nzؒ�8�8(�8�Z�i��8*.8*�8+�8+�yJ�8 �8*.89~8:�8).8+�8:�8;�89~8^8�8�8Ny��y�N8�8�^[�nZ����8�88�8:�8*�8;�8).X[�8�8(�8""" ����&U�G&�vvW%�'Vₐ�&WGW&��6��g���&��#�G'VWҐ����&�WFR�"���&W7V�G2"��FVb��&W7V�G2�������&U�G&�vvW%�'Vₐ��b��B$U5T�E5�D��W��7G2����&WGW&��6��g���'WFFVE�B#����R�'&W7V�G2#����&�Wu��F6��6�FW2#���Ґ�&WGW&��6��g���6�����G2�$U5T�E5�D��&VE�FW�B�V�6�F��s�'WFbӂ"�������&�WFR�"���f�B�V&Ɩ2ֶW�"��FVb��f�E�V&Ɩ5��W�����&WGW&��6��g���'V&Ɩ4�W�#�d�E�T$Ĕ5��U�Ґ����&�WFR�"���7V'67&�&R"��WF��G3ղ%�5B%Ґ�FVb��7V'67&�&R����7V"�&WVW7B�vWE��6��f�&6S�G'VR��V�G���B�7V%�&V�G���B%Т�W�2�7V%�&�W�2%ТF"�FE�7V'67&�F���V�G���B��W�5�'#SfF�%���W�5�&WF�%Ґ�&WGW&��6��g���&��#�G'VWҐ����&�WFR�"���V�7V'67&�&R"��WF��G3ղ%�5B%Ґ�FVb��V�7V'67&�&R����7V"�&WVW7B�vWE��6��f�&6S�G'VR��F"�&V��fU�7V'67&�F���7V%�&V�G���B%Ґ�&WGW&��6��g���&��#�G'VWҐ����&�WFR�"���6��f�r"��WF��G3ղ$tUB%Ґ�FVb��vWE�6��f�r����v�F��V�4��d�u�D��V�6�F��s�'WFbӂ"�2c��&WGW&��6��g������6fU���B�b������&�WFR�"���6��f�r"��WF��G3ղ%�5B%Ґ�FVb��6WE�6��f�r�����Wu�6fr�&WVW7B�vWE��6��f�&6S�G'VR��v�F��V�4��d�u�D��'r"�V�6�F��s�'WFbӂ"�2c������6fU�GV���Wu�6fr�b����u�V�6�FS�G'VR�6�'E��W�3�f�6R��&WGW&��6��g���&��#�G'VWҐ���4�DU�$R�&R�6����R�"%�Ӕզץ׳2�W�B"�����&�WFR�"���6�'B��6�FS�"��FVb��6�'B�6�FR���"".���i�N8+�88>89~i�.8�888:>8;�88���zK�yJ�8�88~8;�8+�8).�;�[�nX�n[�~8�8(��XZ����i�NX�n8�K��h�8~8n8N8�8N8�8(�8 ��f���6^8�8(����i�NX�n88X�n[�~8�8(�8�8~8XZ����i�N8+�8*�8:�8;�88�8;>8+8�8�8�*��~8�8�8�8(�8�8N8 ���X�8��K��898+�8;�8;>h�.{J"�GFW&���F6��8�8�8(.[�NX�nX�n[�~8~8yK���.��zK�yJ�8�888:>8;�88��z�K�>8�[�>i�^�	�8(�y�N��n8�iȎz��[�n8�{Y�8>8n��N8�8""" ��b��B4�DU�$R��F6��6�FR���&WGW&��6��g���&W'&�"#�&��fƖB6�FR'Ғ�C �G'�����7B�fWF6��6��v�U�V�FR�6�FR�W&��C�#'�"��W�6WBW�6WF���2S��&WGW&��6��g���&W'&�"#�b.X�n[�~8�ZKiY~8~8�8~8��W�'Ғ�S ��b��7B�V�G���&WGW&��6��g���&W'&�"#�&��FF'Ғ�C@����7B���7B�6�'E�f�VW2�$FFR"��&W6WE���FW��G&��G'VR���G'���6��6U�gV�����7E�$6��6R%��7G�R�f��B��FFW5�gV�����7E�$FFR%��GB�7G&gF��R�"U��V��VB"��F�Ɨ7B���GFW&��GFW&���F6��f��E�6�֖�%�GFW&�2�6��6U�gV���FFW5�gV��W�6WBW�6WF���2S��GFW&���&f��&�R#�f�6R�'&V6��#�b&W'&�#��W�'Р�2yK���.��zK�yJ�8�888:>8;�88�8�y�N��3YknjZ�izR�(�#n8�iȂ�z��[�n8�{Y�8(�8.��K��898+�8;�8;>h�.{J.8�8�2K��8~X�n[�~8~8�.[�NX�b�6��6U�gV�8).K��8>8n8N8(�8�8(8��zK�8�{Y�8>8n8(.YX���8�8N8 �F�7�����7B�F�3��&W6WE���FW��G&��G'VR��6��6R�F�7���$6��6R%��7G�R�f��B���R�6��6R�&��Ɩ�r�R�֖��W&��G3����Vₐ��#R�6��6R�&��Ɩ�r�#R�֖��W&��G3����Vₐ�'6����B�'6��6��6R�B���FVb�&�V�E�Ɨ7B�6W&�W2���&WGW&�����R�bB�6��b�V�6R&�V�B�f��B�b��"�f�"b��6W&�W5Р�&WGW&��6��g����&6�FR#�6�FR��&FFW2#�F�7���$FFR%��GB�7G&gF��R�"U��V��VB"��F�Ɨ7B����&6��6R#��&�V�E�Ɨ7B�6��6R���'f��V�R#����B�b�f�"b��F�7���%f��V�R%��f���������&�R#��&�V�E�Ɨ7B��R���&�#R#��&�V�E�Ɨ7B��#R���''6�#��&�V�E�Ɨ7B�'6����'GFW&���F6�#�GFW&���Ґ����&�WFR�"���'V����r"��WF��G3ղ%�5B%Ґ�FVb��'V����r����28*.89~8:�Xh^8�8�K��8�8i�Nik8�89�8+�8;>8�8(�Y�88(�8(�8.X�K��X��yJ�8�xJii�8*.89~8:�8�8�8(�2z�yn�^88�8;�8*�8;>8��hk.8~8�8B�K�^X��8�DԔ��D��T�8).�hk.8~8n8N8�8�889^8:�8;>88�XN8��288�8;�8*�8;>8).�8>8n8N8�8�8>8�8�8([��8�C8�8�8(�8i�Nik89�8+�8;>8�j���;�8~8�8N898+8�8�8>8n8N8�8 �v��&��'V�����&�w&W70�v�F��'V����6����b�'V�����&�w&W73��&WGW&��6��g���&��#�G'VR�&�W76vR#�.8+�8*�8:�8;�88�8;>8+8�iz.8�Z����K��8~8�'Ґ��'V�����&�w&W72�G'VP��FVb���"����v��&��'V�����&�w&W70�G'���'V��67&VV��r���W�6WBW�6WF���2S��&��B�b%���T��E$�ttU%�8*�8:�8;â�W�"��f���Ǔ���'V�����&�w&W72�f�6P��F�&VF��r�F�&VB�F&vWC����"�FV����G'VR��7F'B���&WGW&��6��g���&��#�G'VR�&�W76vR#�.8+�8*�8:�8;�88�8;>8+8).�h�Zx�8~8�8~8�'Ґ����5B����T��f�$6��F����"����FVb��5��&�WE���W'2���s�GB�FFWF��R���&��à�"".[�>izR���S�3��5B�8�i>88G'V^8.Y��iz^zY�8(Ni�.�i>ZIn8�xJ�xN8�Z����8).8~8�8N8 �(�iz^i��8�zY�iz^X�NZ�8���8>8n8N8�8N{
+i�>x���zY�iz^8�8(#Y��xJ�xN8�Z����8^8(�8(�z��[�n8~Z��Z�>8�[�8^8B�8""" ��b��r�vVV�F�����S�2S�Y���c�izP�&WGW&�f�6P�B���r�F��R���&WGW&�GB�F��R������B��GB�F��R�R�3����2����������������8988>8*�8+8:�8*n8;>88�8+�8+8+�8:^8;�8:����������������ЦFVb�66�VGV�W%��������v���RG'VS����r�GB�FFWF��R���r��5B���b��5��&�WE���W'2���r��"�2�V�f�&���vWB�$�t��$U��$�UE��U%2"���##��G'���&��B�%�44�TET�U%�8+�8*�8:�8;�88�8;>8+8).Z����8~8�8�"��'V��67&VV��r���W�6WBW�6WF���2S��&��B�b%�44�TET�U%�8*�8:�8;â�W�"��V�6S��&��B�%�44�TET�U%�[�.ZNi�.�i>ZIn8�8�8(8+�8*�88>89r"��F��R�6�VW�%T����DU%d��Ԕ�UDU2�c����FVb7F'E�66�VGV�W"����2k:�hH�8>8�8+�8+8+�8:^8;�8:�8�8*.89~8:�89~8:�8+�8+�Xh^8�8+�8:�88>88�8�8~8nX�^8�8�8�8 �2wV�6�&�z؞8~8:�8�j�Yi#&^8�K��8�8�8(�8�88�8�i[888+�8*�8:�8;�88�8;>8+8��	�y�^8ΘxފH~Z����8^8(�8�8�8 �2&�6f��^8~8�8:�8;�8*�8;�i[8)#8�Y��Z�8~8n8N8�8��8+�8+8;�8:�i�.8�ZIn�:�7&��8�X�~8(�X{�8~8n8�88^8B�8 ��b�2�V�f�&���vWB�$D�4$�U�44�TET�U""���##��&WGW&�B�F�&VF��r�F�&VB�F&vWC��66�VGV�W%�����FV����G'VR��B�7F'B�����F"��E�F"���7F'E�66�VGV�W"�����b����U����%�������#���'B���B��2�V�f�&���vWB�%�%B"�#S"����'Vↆ�7C�#���"��'C��'B�
