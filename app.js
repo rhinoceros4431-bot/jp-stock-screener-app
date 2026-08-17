@@ -314,15 +314,13 @@ async function loadResults() {
   lastData = data;
   saveCachedResults(data);
   const isRunning = data.status === "running";
-  const progress = data.progress || {};
 
   if (isRunning) {
-    const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
-    updatedAtEl.textContent = `更新中... ${progress.done || 0}/${progress.total || "?"}銘柄処理済み (${pct}%)`;
+    updatedAtEl.textContent = "更新中...";
   } else {
     updatedAtEl.textContent = data.updated_at ? `最終更新: ${data.updated_at.replace("T", " ")}` : "まだ実行されていません";
   }
-  summaryEl.textContent = `該当銘柄: ${data.results.length}件` + (isRunning ? "(集計中、随時更新されます)" : "");
+  summaryEl.textContent = `該当銘柄: ${data.results.length}件`;
 
   renderCurrentView();
   return data.status;
@@ -334,9 +332,9 @@ function showCachedResultsImmediately() {
   if (!cached) return;
   lastData = cached;
   updatedAtEl.textContent = cached.updated_at
-    ? `最終更新: ${cached.updated_at.replace("T", " ")}(前回取得分。最新データを取得中...)`
-    : "前回取得分を表示中(最新データを取得中...)";
-  summaryEl.textContent = `該当銘柄: ${cached.results.length}件(前回取得分)`;
+    ? `最終更新: ${cached.updated_at.replace("T", " ")}`
+    : "";
+  summaryEl.textContent = `該当銘柄: ${cached.results.length}件`;
   renderCurrentView();
 }
 
