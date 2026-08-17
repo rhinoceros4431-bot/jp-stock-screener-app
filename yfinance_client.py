@@ -41,6 +41,7 @@ def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size:
                 threads=True,
                 progress=False,
                 auto_adjust=False,
+                timeout=20,
             )
         except Exception as e:
             print(f"[WARN] チャンク {i}-{i+chunk_size} の取得に失敗: {e}")
@@ -92,7 +93,7 @@ def fetch_single_quote(code: str, period: str = "6mo") -> pd.DataFrame:
     """
     ticker = f"{code}.T"
     data = yf.download(tickers=ticker, period=period, interval="1d",
-                        progress=False, auto_adjust=False)
+                        progress=False, auto_adjust=False, timeout=20)
     if data.empty:
         return pd.DataFrame()
     # yfinanceのバージョンによって単一銘柄でもMultiIndex列になる場合があるため平坦化する
