@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import time
 from pathlib import Path
 
 import pandas as pd
 import yaml
 
 import indicators as ind
+import pattern_match
 import signal_stats
 import universe as univ
-from yfinance_client import fetch_daily_quotes_chunks
+from yfinance_client import fetch_daily_quotes_chunks, fetch_single_quote
 
 import push
 
@@ -94,12 +96,40 @@ def evaluate_stock(hist: pd.DataFrame, cfg: dict) -> list[dict]:
             elif close.iloc[-1] < lower.iloc[-1]:
                 hits.append({"type": "oversold", "label": f"ボリンジャーバンド-{bb_cfg['sigma']}σ突破"})
 
+    wl_cfg = cfg.get("watched_levels", {})
+    if wl_cfg.get("enabled"):
+        ma_cfg = wl_cfg.get("moving_average", {})
+        if ma_cfg.get("enabled"):
+            ma_hits = ind.nearby_moving_average(close, tuple(ma_cfg.get("windows", (25, 75, 200))),
+                                                 ma_cfg.get("threshold_pct", 1.5))
+            if ma_hits:
+                for m in ma_hits:
+                    hits.append({"type": "watched_level",
+                                 "label": f"{m['window']}日移動平均線が近い ({m['level']:.1f}円、乖離{m['distance_pct']}%)"})
+
+        re_cfg = wl_cfg.get("recent_extreme", {})
+        if re_cfg.get("enabled"):
+            re_hits = ind.nearby_recent_extreme(high, low, close, re_cfg.get("lookback_days", 60),
+                                                 re_cfg.get("threshold_pct", 2.0))
+            if re_hits:
+                for r in re_hits:
+                    kind_label = "直近高値" if r["type"] == "high" else "直近安値"
+                    hits.append({"type": "watched_level",
+                                 "label": f"{kind_label}が近い ({r['level']:.1f}円、乖離{r['distance_pct']}%)"})
+
+        rn_cfg = wl_cfg.get("round_number", {})
+        if rn_cfg.get("enabled"):
+            rn_hit = ind.nearby_round_number(close, rn_cfg.get("threshold_pct", 1.5))
+            if rn_hit:
+                hits.append({"type": "watched_level",
+                             "label": f"キリの良い株価が近い ({rn_hit['level']:.0f}円、乖離{rn_hit['distance_pct']}%)"})
+
     return hits
 
 
 # シグナル別ブロックの表示優先順(複数シグナルに該当する銘柄は、この順で最初に一致した
 # カテゴリのブロックに表示する)。
-CATEGORY_PRIORITY = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge"]
+CATEGORY_PRIORITY = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge", "watched_level"]
 
 
 def _pick_category(hits: list[dict]) -> str:
@@ -205,6 +235,29 @@ def run_screening() -> dict:
     now = now_dt.isoformat(timespec="seconds")
     results.sort(key=lambda r: -r["score"])
     new_matches = [r for r in results if r["code"] not in prev_codes]
+
+    # 過去の類似パターン検索(該当銘柄のうちスコア上位のみ。2年分のデータを別途取得するため
+    # 全銘柄には行わず、件数を絞って追加の負荷・実行時間・メモリ使用を抑える)
+    pm_cfg = cfg.get("pattern_match", {})
+    if pm_cfg.get("enabled") and results:
+        max_stocks = pm_cfg.get("max_stocks", 150)
+        sleep_between = pm_cfg.get("sleep_between", 0.3)
+        target_results = results[:max_stocks]
+        print(f"[INFO] 過去の類似パターン検索を実行中 ({len(target_results)}銘柄)...")
+        for r in target_results:
+            try:
+                hist2y = fetch_single_quote(r["code"], period="2y")
+                if hist2y.empty:
+                    r["pattern_match"] = {"available": False, "reason": "no_data"}
+                else:
+                    hist2y = hist2y.sort_values("Date").reset_index(drop=True)
+                    close_full = hist2y["Close"].astype(float)
+                    dates_full = hist2y["Date"].dt.strftime("%Y-%m-%d").tolist()
+                    r["pattern_match"] = pattern_match.find_similar_patterns(close_full, dates_full)
+            except Exception as e:
+                print(f"[WARN] {r['code']} の類似パターン検索でエラー: {e}")
+                r["pattern_match"] = {"available": False, "reason": f"error: {e}"}
+            time.sleep(sleep_between)
 
     # シグナル的中率の記録・答え合わせ(サーバー再起動でリセットされる簡易集計。詳細はsignal_stats.py参照)
     try:
