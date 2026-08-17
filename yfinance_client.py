@@ -9,6 +9,7 @@ yfinance (Yahoo!ファイナンスの非公式ライブラリ) を使った無�
 """
 from __future__ import annotations
 
+import gc
 import time
 
 import pandas as pd
@@ -21,12 +22,16 @@ except ImportError as e:
     ) from e
 
 
-def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size: int = 150,
+def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size: int = 30,
                                sleep_between: float = 0.7):
     """複数銘柄の日足OHLCVをチャンク単位で取得し、チャンクごとに (chunk_codes, DataFrame) を
     yield するジェネレータ。呼び出し側がチャンク完了ごとに途中経過を保存できるようにするため、
     全件まとめて返す fetch_daily_quotes ではなくこちらを主に使う。
     DataFrameの列: Code, Date, Open, High, Low, Close, Volume
+
+    chunk_size は既定150から30に縮小している。Renderの無料枠はメモリが512MBしかなく、
+    150銘柄まとめてスレッド並列ダウンロードすると一時的なメモリ使用量がそれを超えて
+    プロセスがOOM Killされることが実際に発生したため(結果が消える不具合の真因だった)。
     """
     for i in range(0, len(codes), chunk_size):
         chunk = codes[i:i + chunk_size]
@@ -67,11 +72,16 @@ def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size:
             frames.append(sub[["Code", "Date", "Open", "High", "Low", "Close", "Volume"]])
 
         print(f"[INFO] {min(i + chunk_size, len(codes))}/{len(codes)} 銘柄 取得完了")
-        yield chunk, (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame())
+        result = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        # チャンクごとに使い終わった生データを明示的に破棄し、次のチャンクに進む前に
+        # メモリを解放する(512MBしかない無料枠でのOOM Kill対策)。
+        del data, frames
+        gc.collect()
+        yield chunk, result
         time.sleep(sleep_between)
 
 
-def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 150,
+def fetch_daily_quotes(codes: list[str], period: str = "6mo", chunk_size: int = 30,
                         sleep_between: float = 0.7) -> pd.DataFrame:
     """複数銘柄の日足OHLCVをまとめて取得し、J-Quants版と同じ列構成のDataFrameに変換する。
     列: Code, Date, Open, High, Low, Close, Volume
