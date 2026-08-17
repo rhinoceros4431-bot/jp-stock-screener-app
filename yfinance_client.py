@@ -9,6 +9,7 @@ yfinance (Yahoo!ファイナンスの非公式ライブラリ) を使った無�
 """
 from __future__ import annotations
 
+import ctypes
 import gc
 import time
 
@@ -21,6 +22,26 @@ except ImportError as e:
         "yfinance がインストールされていません。 pip install yfinance を実行してください。"
     ) from e
 
+# gc.collect() だけでは、pandas/numpy が確保したメモリ領域がOSに返却されず
+# プロセスのRSS(実メモリ使用量)が下がらないことがある(glibcのmalloc実装の都合で、
+# 一度確保した領域を再利用のために保持し続けるため)。そのため、チャンク処理後に
+# malloc_trim(0) を呼んで未使用領域を明示的にOSへ返却する。
+# (Renderの無料枠は512MBしかなく、chunk_sizeを縮小しただけでは実行終盤にじわじわ
+#  メモリ使用量が積み上がってOOM Killされる不具合が実際に起きたための対策)
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+except OSError:
+    _libc = None
+
+
+def _release_memory():
+    gc.collect()
+    if _libc is not None:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
+
 
 def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size: int = 30,
                                sleep_between: float = 0.7):
@@ -32,6 +53,10 @@ def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size:
     chunk_size は既定150から30に縮小している。Renderの無料枠はメモリが512MBしかなく、
     150銘柄まとめてスレッド並列ダウンロードすると一時的なメモリ使用量がそれを超えて
     プロセスがOOM Killされることが実際に発生したため(結果が消える不具合の真因だった)。
+    さらに、chunk_sizeを縮小した後も実行終盤(3000銘柄超)でメモリが徐々に積み上がって
+    OOM Killされることが確認できたため、スレッド並列を無効化(threads=False)して
+    チャンクあたりのピークメモリをさらに抑え、チャンクごとに malloc_trim でメモリを
+    OSへ返却するようにしている。
     """
     for i in range(0, len(codes), chunk_size):
         chunk = codes[i:i + chunk_size]
@@ -43,7 +68,7 @@ def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size:
                 period=period,
                 interval="1d",
                 group_by="ticker",
-                threads=True,
+                threads=False,
                 progress=False,
                 auto_adjust=False,
                 timeout=20,
@@ -76,7 +101,7 @@ def fetch_daily_quotes_chunks(codes: list[str], period: str = "6mo", chunk_size:
         # チャンクごとに使い終わった生データを明示的に破棄し、次のチャンクに進む前に
         # メモリを解放する(512MBしかない無料枠でのOOM Kill対策)。
         del data, frames
-        gc.collect()
+        _release_memory()
         yield chunk, result
         time.sleep(sleep_between)
 
