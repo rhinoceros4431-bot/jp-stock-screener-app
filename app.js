@@ -19,9 +19,10 @@ const CATEGORY_META = {
   dead_cross: { title: "デッドクロス", hint: "下降トレンド転換のシグナル" },
   breakout: { title: "値幅ブレイク", hint: "直近レンジの高値・安値を更新" },
   volume_surge: { title: "出来高急増", hint: "" },
+  watched_level: { title: "注目の価格帯", hint: "移動平均線・直近高値安値・キリの良い株価に接近" },
   other: { title: "その他", hint: "" },
 };
-const CATEGORY_ORDER = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge", "other"];
+const CATEGORY_ORDER = ["oversold", "overbought", "golden_cross", "dead_cross", "breakout", "volume_surge", "watched_level", "other"];
 
 const FAVORITES_KEY = "jpss_favorites";
 const RESULTS_CACHE_KEY = "jpss_results_cache";
@@ -164,8 +165,18 @@ function buildCard(r, rank, newSet) {
       <span class="code">${r.code}</span>
     </div>
     <ul>${hitsHtmlOf(r)}</ul>
+    ${patternMatchHtmlOf(r)}
   `;
   return card;
+}
+
+// 過去の類似パターン検索の結果(勝率・平均リターン)をカードに表示する。
+// 該当銘柄のうちスコア上位のみサーバー側で計算しているため、無い銘柄もある。
+function patternMatchHtmlOf(r) {
+  const pm = r.pattern_match;
+  if (!pm || !pm.available) return "";
+  const sign = pm.avg_forward_return_pct > 0 ? "+" : "";
+  return `<div class="pattern-match-summary">過去に似た値動き ${pm.sample_count}件: ${pm.forward_days}日後の勝率 ${pm.win_rate_pct}%(平均${sign}${pm.avg_forward_return_pct}%)</div>`;
 }
 
 // シグナル種別ごとの過去の的中率(直近のサーバー稼働中に記録された分のみの参考値)。
