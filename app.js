@@ -32,7 +32,7 @@ let priceChart = null;
 let favoriteCodes = loadFavorites();
 
 // アプリを開いた瞬間から「何も表示されない」状態にならないよう、前回取得できた結果を
-// 端末に保存しておき、起動直後はまずそれを表示する(裏で最新データの取得は継続する)　
+// 端末に保存しておき、起動直後はまずそれを表示する(裏で最新データの取得は継続する)。
 function loadCachedResults() {
   try {
     const raw = JSON.parse(localStorage.getItem(RESULTS_CACHE_KEY) || "null");
@@ -464,7 +464,6 @@ let _refreshInProgress = false;
 async function triggerRefresh() {
   if (_refreshInProgress) return;
   _refreshInProgress = true;
-  statusText.textContent = "スクリーニングを開始しました。数十秒〜数分で途中経過が表示され始めます...";
   try {
     const resp = await fetch("/api/run-now", { method: "POST" });
     const data = await resp.json().catch(() => ({}));
