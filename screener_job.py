@@ -15,6 +15,7 @@ import yaml
 
 import indicators as ind
 import pattern_match
+import predictor
 import signal_stats
 import universe as univ
 from yfinance_client import fetch_daily_quotes_chunks, fetch_single_quote
@@ -268,6 +269,27 @@ def run_screening() -> dict:
         print(f"[WARN] シグナル的中率の集計に失敗しました: {e}")
         stats = {}
 
+    # 将来の値動き予測(試験的機能)。今回のスキャンで既に計算済みのhits/pattern_matchのみを
+    # 使って予測を作るため、追加のデータ取得は発生しない。まず目標日を迎えた過去の予測を
+    # 答え合わせして重みを更新し、そのあと新しい予測を積む。
+    prediction_stats = {}
+    try:
+        today_date = now_dt.date()
+        predictor.resolve_due_predictions(price_map, today_date, cfg)
+        pred_state = predictor.generate_predictions(results, price_map, cfg, today_date)
+        prediction_stats = predictor.summarize_accuracy(pred_state)
+        pending_by_code = {p["code"]: p for p in pred_state.get("pending", [])}
+        for r in results:
+            p = pending_by_code.get(r["code"])
+            if p:
+                r["prediction"] = {
+                    "direction": p["predicted_direction"],
+                    "confidence": p["confidence"],
+                    "target_date": p["target_date"],
+                }
+    except Exception as e:
+        print(f"[WARN] 将来予測の生成・答え合わせに失敗しました: {e}")
+
     output = {
         "updated_at": now,
         "results": results,
@@ -275,6 +297,7 @@ def run_screening() -> dict:
         "status": "done",
         "progress": {"done": total, "total": total},
         "signal_stats": stats,
+        "prediction_stats": prediction_stats,
     }
     RESULTS_PATH.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[INFO] スクリーニング完了: {len(results)}銘柄該当 (うち新規{len(new_matches)}銘柄)")
