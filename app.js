@@ -2,6 +2,7 @@ const statusText = document.getElementById("status-text");
 const subscribeBtn = document.getElementById("subscribe-btn");
 const updatedAtEl = document.getElementById("updated-at");
 const summaryEl = document.getElementById("summary");
+const predictionStatsEl = document.getElementById("prediction-stats");
 const resultsEl = document.getElementById("results");
 const viewTabs = document.querySelectorAll(".view-tab");
 const chartModal = document.getElementById("chart-modal");
@@ -166,6 +167,7 @@ function buildCard(r, rank, newSet) {
     </div>
     <ul>${hitsHtmlOf(r)}</ul>
     ${patternMatchHtmlOf(r)}
+    ${predictionHtmlOf(r)}
   `;
   return card;
 }
@@ -177,6 +179,16 @@ function patternMatchHtmlOf(r) {
   if (!pm || !pm.available) return "";
   const sign = pm.avg_forward_return_pct > 0 ? "+" : "";
   return `<div class="pattern-match-summary">過去に似た値動き ${pm.sample_count}件: ${pm.forward_days}日後の勝率 ${pm.win_rate_pct}%(平均${sign}${pm.avg_forward_return_pct}%)</div>`;
+}
+
+// 将来の値動き予測(試験的機能)をカードに表示する。既存シグナルを組み合わせた
+// 参考情報であり、将来の値動きを保証するものではない。
+function predictionHtmlOf(r) {
+  const p = r.prediction;
+  if (!p) return "";
+  const dirLabel = p.direction === "up" ? "上昇 ↑" : "下落 ↓";
+  const dirClass = p.direction === "up" ? "up" : "down";
+  return `<div class="prediction-summary ${dirClass}">予測(試験的): ${p.target_date}頃までに${dirLabel} (確信度${Math.round(p.confidence * 100)}%)</div>`;
 }
 
 // シグナル種別ごとの過去の的中率(直近のサーバー稼働中に記録された分のみの参考値)。
@@ -332,9 +344,17 @@ async function loadResults() {
     updatedAtEl.textContent = data.updated_at ? `最終更新: ${data.updated_at.replace("T", " ")}` : "まだ実行されていません";
   }
   summaryEl.textContent = `該当銘柄: ${data.results.length}件`;
+  predictionStatsEl.innerHTML = predictionStatsHtmlOf(data.prediction_stats);
 
   renderCurrentView();
   return data.status;
+}
+
+// 将来の値動き予測(試験的機能)の、これまでの的中率を画面上部に表示する。
+// 答え合わせされた予測がまだ無いうちは何も表示しない。
+function predictionStatsHtmlOf(stats) {
+  if (!stats || !stats.total) return "";
+  return `<div class="prediction-stats-banner">予測(試験的機能)のこれまでの的中率: ${stats.win_rate}%(${stats.total}件) / 直近${stats.recent_total}件では${stats.recent_win_rate}% ※当たり外れに応じて各シグナルの重みを自動調整しています。将来の値動きを保証するものではありません。</div>`;
 }
 
 // 起動直後、サーバーからの応答を待たずに前回結果をまず表示する
@@ -346,6 +366,7 @@ function showCachedResultsImmediately() {
     ? `最終更新: ${cached.updated_at.replace("T", " ")}`
     : "";
   summaryEl.textContent = `該当銘柄: ${cached.results.length}件`;
+  predictionStatsEl.innerHTML = predictionStatsHtmlOf(cached.prediction_stats);
   renderCurrentView();
 }
 
